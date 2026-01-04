@@ -1,4 +1,4 @@
-# Tiki JSON → PostgreSQL ETL (Project 02)
+# Tiki JSON → PostgreSQL ETL
 
 This ETL script loads **all** Tiki product JSON files matching `products_*.json` into PostgreSQL.
 
