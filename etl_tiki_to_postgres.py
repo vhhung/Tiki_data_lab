@@ -1,4 +1,3 @@
-import argparse
 import json
 import sys
 from pathlib import Path
@@ -167,46 +166,27 @@ def upsert_images(cur, image_rows: Sequence[Tuple], page_size: int = 5000) -> in
 # ----------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--data-dir",
-        default="./data",
-        help="Directory containing products_*.json (default: ./data) OR a JSON file path",
-    )
-    parser.add_argument("--batch-size", type=int, default=5000, help="Insert batch size")
-    parser.add_argument(
-        "--normalize-images",
-        action="store_true",
-        help="Also load images into tiki_product_images table",
-    )
-    parser.add_argument(
-        "--ini",
-        default="database.ini",
-        help="Path to database.ini (section [postgresql])",
-    )
-    args = parser.parse_args()
+    data_dir = Path("./data")
+    ini_path = "database.ini"
+    batch_size = 1000
+    normalize_images = False
 
-    # 1) Resolve input files
-    data_path = Path(args.data_dir)
-    files = iter_product_files(data_path)
-    print(f"Found {len(files)} file(s) from {data_path.resolve()}")
+    files = iter_product_files(data_dir)
+    print(f"Found {len(files)} file(s) from {data_dir.resolve()}")
 
-    # 2) Load DB connection params using config.py
-    db_params = load_config(filename=args.ini, section="postgresql")
+    db_params = load_config(filename=ini_path, section="postgresql")
 
     total_products = 0
     total_images = 0
 
     try:
-        # 3) Connect using connect.py
         with connect(db_params) as conn:
             conn.autocommit = False
-
             with conn.cursor() as cur:
-                # 4) Create tables (DDL)
+                # Create tables
                 try:
                     cur.execute(DDL_PRODUCTS)
-                    if args.normalize_images:
+                    if normalize_images:
                         cur.execute(DDL_IMAGES)
                     conn.commit()
                 except InsufficientPrivilege:
@@ -219,7 +199,7 @@ def main() -> int:
                     err(f"  GRANT CONNECT ON DATABASE {db} TO {user};")
                     return 3
 
-                # 5) Load and upsert data file by file
+                # Load data
                 for fp in files:
                     products = load_products_from_file(fp)
 
@@ -228,7 +208,6 @@ def main() -> int:
                     bad_items = 0
 
                     for item in products:
-                        # Skip records with missing/invalid id
                         try:
                             pid = int(item.get("id"))
                         except Exception:
@@ -241,11 +220,9 @@ def main() -> int:
                         desc = item.get("description")
                         images = item.get("images", [])
 
-                        product_rows.append(
-                            (pid, name, url_key, price, desc, Json(images), fp.name)
-                        )
+                        product_rows.append((pid, name, url_key, price, desc, Json(images), fp.name))
 
-                        if args.normalize_images and isinstance(images, list):
+                        if normalize_images and isinstance(images, list):
                             for pos, url in enumerate(images):
                                 if url:
                                     image_rows.append((pid, pos, str(url)))
@@ -253,13 +230,12 @@ def main() -> int:
                     if bad_items:
                         warn(f"{fp.name}: skipped {bad_items} item(s) with missing/invalid 'id'")
 
-                    # Run inserts in a transaction; rollback if anything fails
                     try:
-                        for batch in chunks(product_rows, args.batch_size):
+                        for batch in chunks(product_rows, batch_size):
                             total_products += upsert_products(cur, batch)
 
-                        if args.normalize_images and image_rows:
-                            for batch in chunks(image_rows, args.batch_size * 2):
+                        if normalize_images and image_rows:
+                            for batch in chunks(image_rows, batch_size * 2):
                                 total_images += upsert_images(cur, batch)
 
                         conn.commit()
